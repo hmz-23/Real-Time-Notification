@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time Notifications</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen p-8">
+    <div class="max-w-4xl mx-auto bg-white shadow-xl rounded-2xl p-8">
+        <h1 class="text-4xl font-bold text-gray-800 mb-6 text-center">Real-Time Notifications</h1>
+
+        <!-- Issues List Section -->
+        <div id="issues-list" class="flex flex-col gap-4 mb-8">
+            <h2 class="text-2xl font-semibold text-gray-700">Select an Issue:</h2>
+            <!-- Issue cards will be populated here by JavaScript -->
+        </div>
+        
+        <!-- Issue Details and Comments Section -->
+        <div id="issue-details-section" class="hidden transition-all duration-300">
+            <button id="back-button" class="mb-4 px-4 py-2 bg-gray-200 text-gray-700 rounded-full hover:bg-gray-300 transition-colors">
+                &larr; Back to Issues
+            </button>
+            <div id="current-issue-title" class="text-2xl font-semibold text-gray-800 mb-4"></div>
+            <div id="current-issue-description" class="text-gray-600 mb-6"></div>
+            
+            <!-- Comments Section -->
+            <div class="bg-gray-50 rounded-lg p-6 mb-6">
+                <h3 class="text-xl font-semibold text-gray-700 mb-4">Comments</h3>
+                <div id="comments-container" class="flex flex-col gap-4 h-96 overflow-y-auto pr-2">
+                    <!-- Comments will be populated here -->
+                </div>
+            </div>
+
+            <!-- Add Comment Form -->
+            <div class="bg-white rounded-lg p-6 shadow-lg">
+                <form id="comment-form" class="flex flex-col gap-4">
+                    <textarea id="comment-input" class="w-full h-24 p-4 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow" placeholder="Add a new comment..." required></textarea>
+                    <button type="submit" class="self-end px-6 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition-colors">
+                        Add Comment
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Message box for alerts -->
+    <div id="message-box" class="fixed inset-x-0 bottom-4 flex justify-center z-50 pointer-events-none">
+        <div id="message-content" class="bg-red-500 text-white p-3 rounded-lg shadow-lg pointer-events-auto hidden"></div>
+    </div>
+
+    <!-- Socket.io client script -->
+    <script src="/socket.io/socket.io.js"></script>
+
+    <script>
+        const issuesListEl = document.getElementById('issues-list');
+        const issueDetailsSection = document.getElementById('issue-details-section');
+        const currentIssueTitleEl = document.getElementById('current-issue-title');
+        const currentIssueDescriptionEl = document.getElementById('current-issue-description');
+        const commentsContainerEl = document.getElementById('comments-container');
+        const commentFormEl = document.getElementById('comment-form');
+        const commentInputEl = document.getElementById('comment-input');
+        const backButtonEl = document.getElementById('back-button');
+        const messageBoxEl = document.getElementById('message-box');
+        const messageContentEl = document.getElementById('message-content');
+        
+        let currentIssueId = null;
+        let socket = null;
+
+        /**
+         * Displays a temporary message in a styled box.
+         * @param {string} message - The message to display.
+         * @param {string} type - The type of message ('success', 'error', etc.).
+         */
+        function showMessage(message, type = 'error') {
+            messageContentEl.textContent = message;
+            messageContentEl.className = 'p-3 rounded-lg shadow-lg pointer-events-auto';
+            messageContentEl.classList.add(type === 'error' ? 'bg-red-500' : 'bg-green-500', 'text-white');
+            messageContentEl.classList.remove('hidden');
+
+            setTimeout(() => {
+                messageContentEl.classList.add('hidden');
+            }, 3000);
+        }
+
+        /**
+         * Fetches and displays the list of issues.
+         */
+        async function fetchIssues() {
+            try {
+                const response = await fetch('/issues');
+                const data = await response.json();
+                
+                issuesListEl.innerHTML = '<h2 class="text-2xl font-semibold text-gray-700 mb-4">Select an Issue:</h2>';
+
+                data.forEach(issue => {
+                    const issueCard = document.createElement('div');
+                    issueCard.className = 'bg-gray-50 rounded-xl p-6 shadow-md cursor-pointer hover:bg-gray-100 transition-colors';
+                    issueCard.innerHTML = `
+                        <h3 class="text-xl font-bold text-gray-800">${issue.title}</h3>
+                        <p class="text-sm text-gray-500 mt-1">${issue.description}</p>
+                    `;
+                    issueCard.onclick = () => showIssueDetails(issue.id);
+                    issuesListEl.appendChild(issueCard);
+                });
+            } catch (error) {
+                console.error('Failed to fetch issues:', error);
+                showMessage('Could not load issues. The server might be down.');
+            }
+        }
+
+        /**
+         * Renders a single comment.
+         * @param {object} comment - The comment object to render.
+         */
+        function renderComment(comment) {
+            const commentEl = document.createElement('div');
+            commentEl.className = 'bg-white p-4 rounded-lg shadow-sm border border-gray-200';
+            commentEl.innerHTML = `
+                <div class="flex justify-between items-center text-sm text-gray-500 mb-1">
+                    <span>${comment.author}</span>
+                    <span>${new Date(comment.timestamp).toLocaleTimeString()}</span>
+                </div>
+                <p class="text-gray-800">${comment.text}</p>
+            `;
+            commentsContainerEl.prepend(commentEl); // Prepend to show the newest comment at the top
+        }
+
+        /**
+         * Connects to the WebSocket and joins an issue room.
+         * Handles the real-time notification listener.
+         */
+        function connectToWebSocket(issueId) {
+            // Check if socket is already connected to the same issue to avoid duplicate listeners
+            if (socket && socket.connected && currentIssueId === issueId) {
+                return;
+            }
+
+            // Close existing connection if any
+            if (socket) {
+                socket.disconnect();
+            }
+            
+            socket = io(); // Connect to the socket.io server
+
+            socket.on('connect', () => {
+                console.log('Socket.io connection opened successfully.');
+                // After connecting, tell the server which issue room to join
+                socket.emit('joinIssue', issueId);
+            });
+
+            socket.on('newComment', (comment) => {
+                console.log('New comment received:', comment);
+                renderComment(comment);
+            });
+
+            socket.on('disconnect', () => {
+                console.log('Socket.io connection disconnected.');
+            });
+        }
+
+        /**
+         * Displays the details and comments for a selected issue.
+         * @param {string} issueId - The ID of the issue to show.
+         */
+        async function showIssueDetails(issueId) {
+            currentIssueId = issueId;
+            issuesListEl.classList.add('hidden');
+            issueDetailsSection.classList.remove('hidden');
+
+            try {
+                const response = await fetch(`/issues/${issueId}`);
+                const issue = await response.json();
+                
+                currentIssueTitleEl.textContent = issue.title;
+                currentIssueDescriptionEl.textContent = issue.description;
+
+                commentsContainerEl.innerHTML = '';
+                issue.comments.slice().reverse().forEach(renderComment); // Show comments from newest to oldest
+                
+                // Connect to the WebSocket after loading initial comments
+                connectToWebSocket(issueId);
+
+            } catch (error) {
+                console.error('Failed to fetch issue details:', error);
+                showMessage('Failed to load issue details. Please try again.');
+                issuesListEl.classList.remove('hidden');
+                issueDetailsSection.classList.add('hidden');
+            }
+        };
+
+        /**
+         * Handles form submission to add a new comment.
+         */
+        commentFormEl.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const commentText = commentInputEl.value.trim();
+            if (!commentText) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/issues/${currentIssueId}/comments`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ comment: commentText }),
+                });
+
+                if (response.ok) {
+                    commentInputEl.value = '';
+                } else {
+                    const error = await response.json();
+                    showMessage(`Error: ${error.error}`);
+                }
+            } catch (error) {
+                console.error('Failed to post comment:', error);
+                showMessage('Failed to send comment. Please check your connection.');
+            }
+        });
+
+        /**
+         * Handles the back button click.
+         */
+        backButtonEl.addEventListener('click', () => {
+            if (socket) {
+                socket.disconnect(); // Disconnect when going back
+            }
+            issuesListEl.classList.remove('hidden');
+            issueDetailsSection.classList.add('hidden');
+            currentIssueId = null;
+        });
+
+        // Initial load of issues when the page loads
+        document.addEventListener('DOMContentLoaded', fetchIssues);
+    </script>
+</body>
+</html>
