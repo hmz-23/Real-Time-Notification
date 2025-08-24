@@ -1,6 +1,5 @@
 # Real-Time-Notification
 
-Real-Time Notifications App
 This is a simple web application built with Node.js, Express, and Socket.io to demonstrate a real-time notification system. The app simulates an issue tracker where users can view issues and add comments, with new comments being instantly broadcast to all active users on the same issue page.
 
 Key Features
